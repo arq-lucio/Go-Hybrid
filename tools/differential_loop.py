@@ -228,35 +228,43 @@ def documented_race(stderr, hazards):
     if not hazards:
         return None
     lines = stderr.splitlines()
-    start = next((i for i, l in enumerate(lines) if "DATA RACE" in l), None)
-    if start is None:
+    starts = [i for i, line in enumerate(lines)
+              if line.strip() == "WARNING: DATA RACE"]
+    if not starts:
         return None
 
-    # Match against the RACING FRAMES only — not the surrounding prose.
-    # The frames are the indented `pkg.func()` / `file:line` lines; they are
-    # what actually names the contended object.
-    frames = "\n".join(
-        l.strip().lower()
-        for l in lines[start:start + 60]
-        if l.startswith((" ", "\t")) and l.strip()
-    )
-    if not frames:
-        return None
-
-    # "concurrent" is true of every race, and the verb says HOW it was
-    # touched, not WHAT was touched — the detector writes `mapaccess1` or
-    # `mapassign`, never "writes". So match on the subject: the noun the
-    # hazard names. That is the part both vocabularies agree on.
+    # Match the registered subject, retaining the existing hazard vocabulary.
     qualifiers = {"concurrent", "simultaneous", "unsynchronized", "racy"}
     verbs = {"read", "reads", "write", "writes", "access", "accesses",
              "update", "updates", "mutation", "mutations"}
+    subjects = []
     for hazard in hazards:
         phrase = hazard.split("(", 1)[0].strip().lower()
         words = [w for w in phrase.split()
                  if w not in qualifiers and w not in verbs]
-        if words and all(w in frames for w in words):
-            return hazard
-    return None
+        if words:
+            subjects.append((hazard, words))
+
+    # A known race cannot excuse another report. Do not merge reports or
+    # omit later ones with a fixed line-count window.
+    matched = []
+    for start, end in zip(starts, starts[1:] + [len(lines)]):
+        frames = []
+        for line in lines[start + 1:end]:
+            # Creation stacks identify launch sites, not racing operations.
+            if line.strip() == "==================" or re.match(
+                    r"^Goroutine \d+\b", line):
+                break
+            if line.startswith((" ", "\t")) and line.strip():
+                frames.append(line.strip().lower())
+        frames = "\n".join(frames)
+        known = next((hazard for hazard, words in subjects
+                      if frames and all(word in frames for word in words)), None)
+        if known is None:
+            return None
+        if known not in matched:
+            matched.append(known)
+    return "; ".join(matched)
 
 
 def build_and_run(bin_path, hy_path, workdir, hazards=(), expected_output=None,

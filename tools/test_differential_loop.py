@@ -524,6 +524,49 @@ class RaceDetectorTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("data race detected", detail)
 
+    def test_documented_race_does_not_hide_later_unregistered_race(self):
+        ok, detail = self.run_race_case(
+            RACE_ON_MAP + RACE_ON_SLICE, ["concurrent map writes"],
+            exit_code=66)
+        self.assertFalse(ok, detail)
+        self.assertIn("data race detected", detail)
+
+    def test_later_documented_race_does_not_cover_first_report(self):
+        ok, detail = self.run_race_case(
+            RACE_ON_SLICE + RACE_ON_MAP, ["concurrent map writes"],
+            exit_code=66)
+        self.assertFalse(ok, detail)
+        self.assertIn("data race detected", detail)
+
+    def test_unregistered_report_after_sixty_lines_is_not_ignored(self):
+        stderr = RACE_ON_MAP + "\n" * 80 + RACE_ON_SLICE
+        ok, detail = self.run_race_case(
+            stderr, ["concurrent map writes"], exit_code=66)
+        self.assertFalse(ok, detail)
+
+    def test_all_reports_of_registered_hazard_remain_allowed(self):
+        ok, detail = self.run_race_case(
+            RACE_ON_MAP + RACE_ON_MAP, ["concurrent map writes"],
+            exit_code=66)
+        self.assertTrue(ok, detail)
+        self.assertIn("documented RUNTIME-HAZARD race", detail)
+
+    def test_goroutine_creation_frame_is_not_a_racing_operation(self):
+        report = RACE_ON_SLICE.rstrip().removesuffix("==================")
+        report += ("Goroutine 7 (running) created at:\n"
+                   "  main.mapWorkers()\n"
+                   "      /tmp/case/map_launcher.go:20 +0x15\n"
+                   "==================\n")
+        ok, detail = self.run_race_case(
+            report, ["concurrent map writes"], exit_code=66)
+        self.assertFalse(ok, detail)
+
+    def test_empty_second_report_is_not_documented(self):
+        ok, detail = self.run_race_case(
+            RACE_ON_MAP + "WARNING: DATA RACE\n",
+            ["concurrent map writes"], exit_code=66)
+        self.assertFalse(ok, detail)
+
     def test_detector_silent_means_no_race_failure(self):
         ok, detail = self.run_race_case("", ["concurrent map writes"])
         self.assertTrue(ok, detail)
